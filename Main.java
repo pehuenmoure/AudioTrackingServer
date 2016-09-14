@@ -5,13 +5,177 @@ import javax.sound.sampled.Line;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.Mixer;
 import javax.sound.sampled.TargetDataLine;
+// import javax.comm.*;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import gnu.io.CommPortIdentifier; 
+import gnu.io.SerialPort;
+import gnu.io.SerialPortEvent; 
+import gnu.io.SerialPortEventListener; 
+import java.util.Enumeration;
+import java.util.Map;
+import java.util.HashMap;
+
+import java.nio.charset.StandardCharsets;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
 
 public class Main {
 	static int RightMicIndex = 0;
 	static int LeftMicIndex = 0;
 	static int Threshold = 500;
+	static int TIME_OUT = 2000;
+	private static final int DATA_RATE = 9600;
+
+	public static class SerialTest implements SerialPortEventListener {
+		private BufferedReader input;
+
+		public SerialTest(SerialPort serialPort){
+			try {
+				input = new BufferedReader(new InputStreamReader(serialPort.getInputStream()));
+			} catch	(Exception e){
+				System.out.println(e);
+			}
+		}
+
+		/**
+		 * Handle an event on the serial port. Read the data and print it.
+		 */
+		public synchronized void serialEvent(SerialPortEvent oEvent) {
+			if (oEvent.getEventType() == SerialPortEvent.DATA_AVAILABLE) {
+				try {
+					String inputLine=input.readLine();
+					System.out.println(inputLine);
+				} catch (Exception e) {
+					System.err.println(e.toString());
+				}
+			}
+		}
+	}
+
+	static class MyHandler implements HttpHandler {
+		OutputStream output;
+
+		public MyHandler(OutputStream output){
+			this.output = output;
+		}
+
+        @Override
+        public void handle(HttpExchange t) throws IOException {
+        	Map<String, String> params = queryToMap(t.getRequestURI().getQuery()); 
+			System.out.println("param cmd=" + params.get("cmd"));
+			writeToSerial(output, params.get("cmd") + "\n");
+
+            String response = "success";
+            t.sendResponseHeaders(200, response.length());
+            OutputStream os = t.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        }
+
+        public Map<String, String> queryToMap(String query){
+		    Map<String, String> result = new HashMap<String, String>();
+		    for (String param : query.split("&")) {
+		        String pair[] = param.split("=");
+		        if (pair.length>1) {
+		            result.put(pair[0], pair[1]);
+		        }else{
+		            result.put(pair[0], "");
+		        }
+		    }
+		    return result;
+		}
+    }
+
+	final protected static char[] hexArray = "0123456789ABCDEF".toCharArray();
+	public static String bytesToHex(byte[] bytes) {
+	    char[] hexChars = new char[bytes.length * 2];
+	    for ( int j = 0; j < bytes.length; j++ ) {
+	        int v = bytes[j] & 0xFF;
+	        hexChars[j * 2] = hexArray[v >>> 4];
+	        hexChars[j * 2 + 1] = hexArray[v & 0x0F];
+	    }
+	    return new String(hexChars);
+	}
+
+	public static void writeToSerial(OutputStream output, String toWrite){
+		try {
+			byte[] b = toWrite.getBytes(StandardCharsets.US_ASCII);
+			output.write(b);
+			output.flush();
+		} catch(Exception e){
+			System.out.println(e);
+		}
+	}
 	
 	public static void main(String[] args) {
+
+		Enumeration portEnum = CommPortIdentifier.getPortIdentifiers();
+
+		String portName = "/dev/tty.usbmodem14111";
+
+		SerialPort serialPort;
+		OutputStream output = null;
+
+		//First, Find an instance of serial port as set in PORT_NAMES.
+		while (portEnum.hasMoreElements()) {
+			CommPortIdentifier currPortId = (CommPortIdentifier) portEnum.nextElement();
+			System.out.println(currPortId.getName());
+			// System.out.println(currPortId.getName().equals(portName));
+			if(currPortId.getName().equals(portName)){
+				System.out.println("found port");
+				try{
+					// open serial port, and use class name for the appName.
+					serialPort = (SerialPort) currPortId.open("AudioTracker",
+							TIME_OUT);
+
+					Runtime.getRuntime().addShutdownHook(new Thread() {
+					    public void run() { 
+					    	System.out.println("Closing");
+					    	serialPort.close();
+					    }
+					});
+
+					// set port parameters
+					serialPort.setSerialPortParams(DATA_RATE,
+							SerialPort.DATABITS_8,
+							SerialPort.STOPBITS_1,
+							SerialPort.PARITY_NONE);
+
+					// add event listeners
+					// SerialTest listener = new Main.SerialTest(serialPort);
+					// serialPort.addEventListener(listener);
+					// serialPort.notifyOnDataAvailable(true);
+
+					output = serialPort.getOutputStream();
+
+					try {
+						HttpServer server = HttpServer.create(new InetSocketAddress(8000), 0);
+				        server.createContext("/test", new MyHandler(output));
+				        server.setExecutor(null); // creates a default executor
+				        server.start();
+				    } catch(Exception e){
+				    	System.out.println(e);
+				    }
+
+					writeToSerial(output, "p150\n");
+					writeToSerial(output, "t045\n");
+				} catch(Exception e){
+					System.out.println(e);
+				}
+				
+				break;
+			}
+		}
+
+
 		AudioFormat format = new AudioFormat(96000.0f, 16, 1, true, false);
 		DataLine.Info info = new DataLine.Info(TargetDataLine.class, format); 
 
@@ -90,8 +254,8 @@ public class Main {
 			System.out.println("max1: " + allmax1);
 			System.out.println("max2: " + allmax2);
 
-			float threshold1 = 4f * allmax1;
-			float threshold2 = 4f * allmax2;
+			float threshold1 = 800f;//4f * allmax1;
+			float threshold2 = 800f;//4f * allmax2;
 
 			float[] directionBuffer = new float[150];
 			int directionBufferIndex = 0;
@@ -133,32 +297,19 @@ public class Main {
 				// System.out.println(max1 + "\t" + max2 + "\t" + directionAverage);
 				if(directionAverage > 0.2 && lastDirection != 1){
 					System.out.println("1");
+					if(output != null){
+						System.out.println("Write: 55");
+						writeToSerial(output, "p045\n");
+					}
 					lastDirection = 1;
 				} else if(directionAverage < -0.2 && lastDirection != -1){
 					System.out.println("-1");
+					if(output != null){
+						System.out.println("Write: 115");
+						writeToSerial(output, "p135\n");
+					}
 					lastDirection = -1;
 				}
-
-				// System.out.println(max1 + "\t" + max2 + "\t" + outVal);
-
-
-
-				// if (max1 >= 5000 && max2 >= 5000){
-				// 	System.out.println(0);
-				// }else if (max1 >= 5000){
-				// 	System.out.println(-1);
-				// }else if (max2 >= 5000){
-				// 	System.out.println(1);
-				// }else{
-				// 	System.out.println(0);
-				// }
-				// if (difference > Threshold){
-				// 	System.out.println(1);
-				// }else if (difference < -1 * Threshold){
-				// 	System.out.println(-1);
-				// }else{
-				// 	System.out.println(0);
-				// }
 			}
 		} catch (LineUnavailableException ex) {
 			System.out.println(ex);
