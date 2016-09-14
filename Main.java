@@ -254,8 +254,8 @@ public class Main {
 			System.out.println("max1: " + allmax1);
 			System.out.println("max2: " + allmax2);
 
-			float threshold1 = 800f;//4f * allmax1;
-			float threshold2 = 800f;//4f * allmax2;
+			float threshold1 = 2400f;//4f * allmax1;
+			float threshold2 = 2400f;//4f * allmax2;
 
 			float[] directionBuffer = new float[150];
 			int directionBufferIndex = 0;
